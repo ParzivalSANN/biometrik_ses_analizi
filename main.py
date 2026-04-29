@@ -10,7 +10,7 @@ from utils import extract_features
 
 # Veri yollari
 # Eger LibriSpeech verisi yoksa sadece kendi seslerimizle egitilir.
-DATA_DIR = r"C:\Users\Elcin Erdemir\Desktop\speaker_recognition_project\data\dev-clean\LibriSpeech\dev-clean"
+DATA_DIR = "data/LibriSpeech"
 
 def prepare_data(data_dir, max_speakers=20, max_files=10):
     X, y = [], []
@@ -37,8 +37,6 @@ def prepare_data(data_dir, max_speakers=20, max_files=10):
                             y.append(current_id)
                             f_count += 1
             print(f"[{current_id+1}] {speaker} islendi.")
-    else:
-        print("Bilgi: LibriSpeech klasoru bulunamadi, sadece yerel kullanicilar egitilecek.")
 
     # 2. Yerel Kullanici Seslerini Yukle (Berkay, Elcin vb.)
     user_base_dir = "data/user_voice"
@@ -60,6 +58,16 @@ def prepare_data(data_dir, max_speakers=20, max_files=10):
                         X.append(feat)
                         y.append(current_id)
                 print(f"[*] {u_folder} eklendi. ({len(user_files)} ornek)")
+
+    # 3. SVM Hatasini Onle: Eger sadece 1 kisi varsa, sahte bir 'GURULTU' sinifi ekle
+    if len(speakers) == 1:
+        print("\n[!] Sadece 1 kullanici bulundu. SVM egitimi icin sahte 'GURULTU' sinifi ekleniyor...")
+        speakers.append("GURULTU")
+        noise_id = len(speakers) - 1
+        for _ in range(5):
+            # 120 boyutlu rastgele gurultu ozellikleri
+            X.append(np.random.normal(0, 0.1, 120))
+            y.append(noise_id)
 
     return np.array(X), np.array(y), speakers
 
@@ -105,4 +113,4 @@ print(f"Model dogrulugu: %{acc*100:.2f}")
 # Kaydet
 pickle.dump(svm, open("data/svm_model.pkl", "wb"))
 pickle.dump(scaler, open("data/scaler.pkl", "wb"))
-print("\n✅ Egitim tamamlandi. 'data/' klasoru guncellendi.")
+print("\n[OK] Egitim tamamlandi. 'data/' klasoru guncellendi.")
