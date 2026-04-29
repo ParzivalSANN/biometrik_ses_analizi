@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 # ── Session State ─────────────────────────────────────────────────────────────
-for k, v in [("auth_status", False), ("last_transcript", ""), ("last_response", ""), ("auth_prob", 0.0)]:
+for k, v in [("auth_status", False), ("auth_user", "OPERATOR"), ("last_transcript", ""), ("last_response", ""), ("auth_prob", 0.0)]:
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -295,13 +295,14 @@ st.markdown(CSS, unsafe_allow_html=True)
 # ── Load ML Models ────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_assets():
-    if not os.path.exists("data/svm_model.pkl"):
-        return None, None
-    svm    = pickle.load(open("data/svm_model.pkl", "rb"))
-    scaler = pickle.load(open("data/scaler.pkl",    "rb"))
-    return svm, scaler
+    if not os.path.exists("data/svm_model.pkl") or not os.path.exists("data/speakers.pkl"):
+        return None, None, ["UNKNOWN"]
+    svm      = pickle.load(open("data/svm_model.pkl", "rb"))
+    scaler   = pickle.load(open("data/scaler.pkl",    "rb"))
+    speakers = pickle.load(open("data/speakers.pkl",  "rb"))
+    return svm, scaler, speakers
 
-svm, scaler = load_assets()
+svm, scaler, speakers = load_assets()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SCREEN 1 — LOCKED / AUTH
@@ -473,8 +474,13 @@ if not st.session_state.auth_status:
                     if svm is None:
                         st.error("Model yüklenemedi. Terminalde `python main.py` çalıştırın.")
                     else:
-                        prob      = svm.predict_proba(scaler.transform([feat])).max()
-                        THRESHOLD = 0.20
+                        probs = svm.predict_proba(scaler.transform([feat]))[0]
+                        prob  = probs.max()
+                        class_idx = probs.argmax()
+                        predicted_user = speakers[class_idx] if class_idx < len(speakers) else "UNKNOWN"
+                        
+                        THRESHOLD = 0.25 # Guvenlik icin biraz yukselttik
+
                         if prob >= THRESHOLD:
                             # STT için sesi geçici dosyaya yaz
                             import tempfile, soundfile as _sf, numpy as _np
@@ -494,6 +500,7 @@ if not st.session_state.auth_status:
                                 if os.path.exists(tmp): os.remove(tmp)
 
                             st.session_state.auth_status     = True
+                            st.session_state.auth_user       = predicted_user.replace("Speaker_", "S-")
                             st.session_state.auth_prob       = prob
                             st.session_state.last_transcript = transcript
                             st.session_state.last_response   = process_with_llm(transcript)
@@ -508,6 +515,8 @@ if not st.session_state.auth_status:
 #  SCREEN 2 — AUTHORIZED / NEURAL TERMINAL
 # ═══════════════════════════════════════════════════════════════════════════════
 else:
+    from inference import text_to_speech
+    
     prob_pct  = st.session_state.auth_prob * 100
     bar_width = min(prob_pct * 3, 100)
 
@@ -516,7 +525,7 @@ else:
         f'<div class="access-banner">'
         f'  <div style="display:flex;align-items:center;">'
         f'    <span class="live-dot"></span>'
-        f'    <span class="access-title">ACCESS GRANTED — USER_OPERATOR</span>'
+        f'    <span class="access-title">ACCESS GRANTED — {st.session_state.auth_user.upper()}</span>'
         f'  </div>'
         f'  <div class="data-mono">CONF: {prob_pct:.1f}% // SESSION ACTIVE</div>'
         f'  <span class="status-chip"><span class="status-dot"></span>SYSTEM ONLINE</span>'
@@ -545,48 +554,102 @@ else:
             f'</div>'
 
             f'<div style="padding:14px 0; border-bottom:1px solid rgba(255,255,255,0.04);">'
-            f'  <div class="label-caps" style="font-size:9px; color:#849495;">ENGINE</div>'
-            f'  <div style="font-family:Space Grotesk,sans-serif; font-size:14px; color:#e0e2eb; margin-top:4px;">SVM · RBF KERNEL</div>'
+            f'  <div class="label-caps" style="font-size:9px; color:#849495;">NEURAL ENGINE</div>'
+            f'  <div style="font-family:Space Grotesk,sans-serif; font-size:14px; color:#e0e2eb; margin-top:4px;">Llama-3.3-70B // ACTIVE</div>'
             f'</div>'
-
+            
             f'<div style="padding:14px 0; border-bottom:1px solid rgba(255,255,255,0.04);">'
-            f'  <div class="label-caps" style="font-size:9px; color:#849495;">FEATURE DIMS</div>'
-            f'  <div style="font-family:Space Grotesk,sans-serif; font-size:14px; color:#e0e2eb; margin-top:4px;">120-D // MFCC+Δ+ΔΔ</div>'
+            f'  <div class="label-caps" style="font-size:9px; color:#849495;">VOICE FEEDBACK</div>'
+            f'  <div style="font-family:Space Grotesk,sans-serif; font-size:14px; color:#00F0FF; margin-top:4px;">gTTS // ENABLED</div>'
             f'</div>'
 
             f'<div style="padding:14px 0;">'
             f'  <div class="label-caps" style="font-size:9px; color:#849495;">NETWORK</div>'
-            f'  <div style="font-family:Space Grotesk,sans-serif; font-size:14px; color:#00F0FF; margin-top:4px;">ENCRYPTED // LOCAL</div>'
+            f'  <div style="font-family:Space Grotesk,sans-serif; font-size:14px; color:#00F0FF; margin-top:4px;">ENCRYPTED // TUNNEL</div>'
             f'</div>'
             f'</div>',
             unsafe_allow_html=True
         )
 
-    # ── RIGHT: Terminal ──
+    # ── RIGHT: Terminal & Interaction ──
     with col_r:
-        transcript = st.session_state.last_transcript or "(Ses metne çevrilemedi)"
-        response   = st.session_state.last_response   or "(LLM yanıt üretemedi — .env dosyasını kontrol edin)"
-
         st.markdown(
             '<div class="aegis-panel">'
             '<div class="scan-line"></div>'
-            '<div class="label-caps" style="margin-bottom:22px;">NEURAL TERMINAL // Llama-3.3-70B</div>'
-
-            '<div style="margin-bottom:22px;">'
-            '  <div class="label-caps" style="font-size:9px; color:#849495; margin-bottom:10px;">&gt; DECODED VOICE INPUT</div>'
-            f'  <div class="term-block">{transcript}</div>'
-            '</div>'
-
-            '<div style="margin-bottom:4px;">'
-            '  <div class="label-caps" style="font-size:9px; color:#849495; margin-bottom:10px;">&gt; AI RESPONSE</div>'
-            f'  <div class="term-block ai">{response}</div>'
-            '</div>'
-            '</div>',
+            '<div class="label-caps" style="margin-bottom:22px;">AEGIS COMMAND TERMINAL</div>',
             unsafe_allow_html=True
         )
+        
+        # Chat History Container
+        chat_placeholder = st.empty()
+        
+        with chat_placeholder.container():
+            transcript = st.session_state.last_transcript or "(Bekliyor...)"
+            response   = st.session_state.last_response   or "(Yanıt bekleniyor...)"
+            
+            st.markdown(
+                f'<div style="margin-bottom:22px;">'
+                f'  <div class="label-caps" style="font-size:9px; color:#849495; margin-bottom:10px;">&gt; OPERATOR INPUT</div>'
+                f'  <div class="term-block">{transcript}</div>'
+                f'</div>'
+                f'<div style="margin-bottom:4px;">'
+                f'  <div class="label-caps" style="font-size:9px; color:#849495; margin-bottom:10px;">&gt; AEGIS RESPONSE</div>'
+                f'  <div class="term-block ai">{response}</div>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+            
+            # Voice feedback
+            if st.session_state.last_response:
+                audio_bytes = text_to_speech(st.session_state.last_response)
+                if audio_bytes:
+                    st.audio(audio_bytes, format="audio/mp3", autoplay=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+        
+        # Continuous Interaction Mic
+        inner_col1, inner_col2 = st.columns([3, 1])
+        
+        with inner_col1:
+            chat_audio = mic_recorder(
+                start_prompt="⬤  ASİSTANLA KONUŞ",
+                stop_prompt="■  MESAJI GÖNDER",
+                key="chat_recorder"
+            )
+        
+        with inner_col2:
+            if st.button("✖  LOGOUT"):
+                st.session_state.auth_status = False
+                st.session_state.auth_prob   = 0.0
+                st.session_state.last_transcript = ""
+                st.session_state.last_response = ""
+                st.rerun()
 
-        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-        if st.button("⬤  TERMINATE SESSION", use_container_width=True):
-            st.session_state.auth_status = False
-            st.session_state.auth_prob   = 0.0
-            st.rerun()
+        # Handle Chat Input
+        if chat_audio:
+            with st.spinner("PROCESSING VOICE COMMAND..."):
+                import tempfile, soundfile as _sf, numpy as _np
+                sr  = chat_audio.get("sample_rate", 44100)
+                sw  = chat_audio.get("sample_width", 2)
+                raw = chat_audio["bytes"]
+                
+                # Convert to numpy for saving
+                arr = _np.frombuffer(raw, dtype=_np.int16 if sw==2 else _np.float32)
+                if arr.dtype == _np.int16:
+                    arr = arr.astype(_np.float32) / 32768.0
+                
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+                    tmp_path = tmp_file.name
+                    _sf.write(tmp_path, arr, sr)
+                
+                try:
+                    transcript = speech_to_text(tmp_path)
+                    if transcript:
+                        st.session_state.last_transcript = transcript
+                        st.session_state.last_response   = process_with_llm(transcript)
+                        st.rerun()
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+

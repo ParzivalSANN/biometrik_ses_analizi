@@ -1,97 +1,90 @@
-#MFCC
 import os
 import librosa
 import numpy as np
-
-DATA_DIR = r"C:\Users\Elcin Erdemir\Desktop\speaker_recognition_project\data\dev-clean\LibriSpeech\dev-clean"
-
-def extract_mfcc(file_path, n_mfcc=40, sr=16000):
-    try:
-        audio, _ = librosa.load(file_path, sr=sr, duration=5.0)
-        audio, _ = librosa.load(file_path, sr=sr, duration=5.0)
-        audio, _ = librosa.effects.trim(audio, top_db=20)
-        if len(audio) < sr * 0.5:
-            return None
-            
-        audio = librosa.effects.preemphasis(audio)
-        mfcc   = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=n_mfcc)
-        delta  = librosa.feature.delta(mfcc)
-        delta2 = librosa.feature.delta(mfcc, order=2)
-        
-        return np.vstack([mfcc, delta, delta2]).mean(axis=1)
-    except Exception as e:
-        print(f"Hata: {file_path} -> {e}")
-        return None
-
-def prepare_data(data_dir, max_speakers=20, max_files=50):
-    # Eger data/X.npy ve data/y.npy varsa, onlari kullanalim (Orijinal veriseti yoksa hata vermesin)
-    if os.path.exists("data/X.npy") and os.path.exists("data/y.npy"):
-        print("Mevcut X.npy ve y.npy yukleniyor...")
-        X = list(np.load("data/X.npy"))
-        y = list(np.load("data/y.npy"))
-        speakers = [f"Speaker_{i}" for i in range(len(set(y)))]
-    else:
-        print("Veri klasorunden yukleniyor...")
-        X, y = [], []
-        speakers = sorted(os.listdir(data_dir))[:max_speakers]
-        for speaker_id, speaker in enumerate(speakers):
-            speaker_path = os.path.join(data_dir, speaker)
-            if not os.path.isdir(speaker_path): continue
-            
-            files = []
-            for root, _, filenames in os.walk(speaker_path):
-                for f in filenames:
-                    if f.endswith('.flac') or f.endswith('.wav'):
-                        files.append(os.path.join(root, f))
-                        
-            for fpath in files[:max_files]:
-                feat = extract_mfcc(fpath)
-                if feat is not None:
-                    X.append(feat)
-                    y.append(speaker_id)
-            print(f"[{speaker_id+1}/{len(speakers)}] {speaker} islendi.")
-
-    # Kullanici verilerini (kendi sesimizi) veri setine dahil et
-    user_data_dir = "data/user_voice"
-    if os.path.exists(user_data_dir):
-        user_files = [os.path.join(user_data_dir, f) for f in os.listdir(user_data_dir) if f.endswith('.wav')]
-        if len(user_files) > 0:
-            speakers.append("USER_OPERATOR")
-            speaker_id = len(set(y)) if len(y)>0 else 0
-            for fpath in user_files:
-                feat = extract_mfcc(fpath)
-                if feat is not None:
-                    X.append(feat)
-                    y.append(speaker_id)
-            print(f"[*] USER_OPERATOR islendi. ({len(user_files)} dosya eklendi)")
-
-    return np.array(X), np.array(y), speakers
-
-X, y, speakers = prepare_data(DATA_DIR)
-print(f"\nToplam ornek: {X.shape[0]}")
-print(f"Konusmaci sayisi: {len(speakers)}")
-print(f"Ozellik vektoru boyutu: {X.shape[1]}")
-
-np.save("data/X.npy", X)
-np.save("data/y.npy", y)
-print("\nX.npy ve y.npy kaydedildi!")
-
-
-
-
-
-#SVM Modeli
+import pickle
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
-import pickle
+from utils import extract_features
 
+# Veri yollari
+# Eger LibriSpeech verisi yoksa sadece kendi seslerimizle egitilir.
+DATA_DIR = r"C:\Users\Elcin Erdemir\Desktop\speaker_recognition_project\data\dev-clean\LibriSpeech\dev-clean"
 
+def prepare_data(data_dir, max_speakers=20, max_files=10):
+    X, y = [], []
+    speakers = []
+
+    # 1. LibriSpeech Verilerini Yukle (Opsiyonel)
+    if os.path.exists(data_dir):
+        print(f"LibriSpeech verileri yukleniyor: {data_dir}")
+        ls_speakers = sorted(os.listdir(data_dir))[:max_speakers]
+        for s_idx, speaker in enumerate(ls_speakers):
+            s_path = os.path.join(data_dir, speaker)
+            if not os.path.isdir(s_path): continue
+            
+            speakers.append(f"Speaker_{speaker}")
+            current_id = len(speakers) - 1
+            
+            f_count = 0
+            for root, _, filenames in os.walk(s_path):
+                for f in filenames:
+                    if f.endswith(('.flac', '.wav')) and f_count < max_files:
+                        feat = extract_features(os.path.join(root, f))
+                        if feat is not None:
+                            X.append(feat)
+                            y.append(current_id)
+                            f_count += 1
+            print(f"[{current_id+1}] {speaker} islendi.")
+    else:
+        print("Bilgi: LibriSpeech klasoru bulunamadi, sadece yerel kullanicilar egitilecek.")
+
+    # 2. Yerel Kullanici Seslerini Yukle (Berkay, Elcin vb.)
+    user_base_dir = "data/user_voice"
+    if os.path.exists(user_base_dir):
+        print(f"\nYerel kullanicilar taraniyor: {user_base_dir}")
+        user_folders = [d for d in os.listdir(user_base_dir) if os.path.isdir(os.path.join(user_base_dir, d))]
+        
+        for u_folder in user_folders:
+            u_path = os.path.join(user_base_dir, u_folder)
+            user_files = [os.path.join(u_path, f) for f in os.listdir(u_path) if f.endswith('.wav')]
+            
+            if len(user_files) > 0:
+                speakers.append(u_folder) # Klasor ismi = Kullanici ismi
+                current_id = len(speakers) - 1
+                
+                for fpath in user_files:
+                    feat = extract_features(fpath)
+                    if feat is not None:
+                        X.append(feat)
+                        y.append(current_id)
+                print(f"[*] {u_folder} eklendi. ({len(user_files)} ornek)")
+
+    return np.array(X), np.array(y), speakers
+
+# ── Ana Pipeline ──────────────────────────────────────────────────────────────
+print("=== AEGIS OS - MODEL EGITIM TERMINALI ===")
+
+X, y, speakers = prepare_data(DATA_DIR)
+
+if len(X) == 0:
+    print("HATA: Hic ses verisi bulunamadi! Lutfen 'enroll_user.py' ile sesinizi kaydedin.")
+    exit()
+
+print(f"\nToplam ornek: {X.shape[0]}")
+print(f"Konusmaci sayisi: {len(speakers)}")
+print(f"Konusmacilar: {', '.join(speakers)}")
+
+# Verileri diskte sakla (hizli erisim icin)
+os.makedirs("data", exist_ok=True)
+np.save("data/X.npy", X)
+np.save("data/y.npy", y)
+pickle.dump(speakers, open("data/speakers.pkl", "wb"))
 
 # Train/Test ayir
 X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
+    X, y, test_size=0.2, random_state=42, stratify=y if len(set(y)) > 1 else None
 )
 
 # Normalize et
@@ -100,16 +93,16 @@ X_train = scaler.fit_transform(X_train)
 X_test  = scaler.transform(X_test)
 
 # SVM egit
-print("\nSVM egitiliyor...")
+print("\nSVM (RBF Kernel) egitiliyor...")
 svm = SVC(kernel='rbf', probability=True, C=10, gamma='scale')
 svm.fit(X_train, y_train)
 
 # Dogruluk
 y_pred = svm.predict(X_test)
 acc = accuracy_score(y_test, y_pred)
-print(f"Test dogrulugu: %{acc*100:.2f}")
+print(f"Model dogrulugu: %{acc*100:.2f}")
 
-# Modeli kaydet
+# Kaydet
 pickle.dump(svm, open("data/svm_model.pkl", "wb"))
 pickle.dump(scaler, open("data/scaler.pkl", "wb"))
-print("Model kaydedildi: svm_model.pkl")
+print("\n✅ Egitim tamamlandi. 'data/' klasoru guncellendi.")
