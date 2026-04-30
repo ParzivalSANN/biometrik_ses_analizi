@@ -1,0 +1,13 @@
+librosa
+numpy
+scikit-learn
+matplotlib
+soundfile
+groq
+google-generativeai
+python-dotenv
+sounddevice
+fpdf2
+python-docx
+streamlit-mic-recorder
+nbformat
