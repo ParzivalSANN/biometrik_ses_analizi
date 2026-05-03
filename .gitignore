@@ -3,3 +3,4 @@ data/LibriSpeech/
 data/dev-clean/ 
 __pycache__/ 
 *.pyc 
+.env
